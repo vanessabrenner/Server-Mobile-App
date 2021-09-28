@@ -17,6 +17,11 @@ app.use(async (ctx, next) => {
 });
 
 app.use(async (ctx, next) => {
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  await next();
+});
+
+app.use(async (ctx, next) => {
   try {
     await next();
   } catch (err) {
@@ -94,7 +99,7 @@ const createItem = async (ctx) => {
   }
   item.id = `${parseInt(lastId) + 1}`;
   lastId = item.id;
-  item.date = Date.now();
+  item.date = new Date();
   item.version = 1;
   items.push(item);
   ctx.response.body = item;
@@ -109,6 +114,7 @@ router.post('/item', async (ctx) => {
 router.put('/item/:id', async (ctx) => {
   const id = ctx.params.id;
   const item = ctx.request.body;
+  item.date = new Date();
   const itemId = item.id;
   if (itemId && id !== item.id) {
     ctx.response.body = { issue: [{ error: `Param id and body id should be the same` }] };
@@ -159,7 +165,7 @@ setInterval(() => {
   console.log(`
    ${item.text}`);
   broadcast({ event: 'created', payload: { item } });
-}, 15000);
+}, 150000);
 
 app.use(router.routes());
 app.use(router.allowedMethods());

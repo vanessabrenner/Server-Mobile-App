@@ -7,8 +7,11 @@ const Router = require('koa-router');
 const cors = require('koa-cors');
 const bodyparser = require('koa-bodyparser');
 
+// Middleware pentru parsarea corpului cererii și CORS
 app.use(bodyparser());
 app.use(cors());
+
+// Middleware pentru logarea cererilor
 app.use(async (ctx, next) => {
   const start = new Date();
   await next();
@@ -16,158 +19,181 @@ app.use(async (ctx, next) => {
   console.log(`${ctx.method} ${ctx.url} ${ctx.response.status} - ${ms}ms`);
 });
 
+// Simulare de întârziere pentru răspunsuri
 app.use(async (ctx, next) => {
   await new Promise(resolve => setTimeout(resolve, 2000));
   await next();
 });
 
+// Middleware pentru gestionarea erorilor
 app.use(async (ctx, next) => {
   try {
     await next();
   } catch (err) {
-    ctx.response.body = { issue: [{ error: err.message || 'Unexpected error' }] };
+    ctx.response.body = { message: err.message || 'Unexpected error' };
     ctx.response.status = 500;
   }
 });
 
-class Item {
-  constructor({ id, text, date, version }) {
+// Clasa Book
+class Book {
+  constructor({ id, title, author, pages, date, version, inStock = true }) {
     this.id = id;
-    this.text = text;
+    this.title = title;
+    this.author = author;
+    this.pages = pages;
     this.date = date;
     this.version = version;
+    this.inStock = inStock; // Stocul cărții
   }
 }
 
-const items = [];
-for (let i = 0; i < 3; i++) {
-  items.push(new Item({ id: `${i}`, text: `item ${i}`, date: new Date(Date.now() + i), version: 1 }));
-}
-let lastUpdated = items[items.length - 1].date;
-let lastId = items[items.length - 1].id;
-const pageSize = 10;
+// Datele inițiale
+const books = [
+  new Book({ id: '1', title: 'To Kill a Mockingbird', author: 'Harper Lee', pages: 281, date: new Date('1960-07-11'), version: 1, inStock: true }),
+  new Book({ id: '2', title: '1984', author: 'George Orwell', pages: 328, date: new Date('1949-06-08'), version: 1, inStock: true }),
+  new Book({ id: '3', title: 'The Great Gatsby', author: 'F. Scott Fitzgerald', pages: 180, date: new Date('1925-04-10'), version: 1, inStock: true }),
+];
 
-const broadcast = data =>
-  wss.clients.forEach(client => {
+let lastUpdated = books[books.length - 1].date;
+let lastId = books[books.length - 1].id;
+
+// Funcție de broadcast pentru WebSocket
+const broadcast = (data) => {
+  wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(JSON.stringify(data));
     }
   });
-
-const router = new Router();
-
-router.get('/item', ctx => {
-  const ifModifiedSince = ctx.request.get('If-Modif ied-Since');
-  if (ifModifiedSince && new Date(ifModifiedSince).getTime() >= lastUpdated.getTime() - lastUpdated.getMilliseconds()) {
-    ctx.response.status = 304; // NOT MODIFIED
-    return;
-  }
-  const text = ctx.request.query.text;
-  const page = parseInt(ctx.request.query.page) || 1;
-  ctx.response.set('Last-Modified', lastUpdated.toUTCString());
-  const sortedItems = items
-    .filter(item => text ? item.text.indexOf(text) !== -1 : true)
-    .sort((n1, n2) => -(n1.date.getTime() - n2.date.getTime()));
-  const offset = (page - 1) * pageSize;
-  // ctx.response.body = {
-  //   page,
-  //   items: sortedItems.slice(offset, offset + pageSize),
-  //   more: offset + pageSize < sortedItems.length
-  // };
-  ctx.response.body = items;
-  ctx.response.status = 200;
-});
-
-router.get('/item/:id', async (ctx) => {
-  const itemId = ctx.request.params.id;
-  const item = items.find(item => itemId === item.id);
-  if (item) {
-    ctx.response.body = item;
-    ctx.response.status = 200; // ok
-  } else {
-    ctx.response.body = { issue: [{ warning: `item with id ${itemId} not found` }] };
-    ctx.response.status = 404; // NOT FOUND (if you know the resource was deleted, then return 410 GONE)
-  }
-});
-
-const createItem = async (ctx) => {
-  const item = ctx.request.body;
-  if (!item.text) { // validation
-    ctx.response.body = { issue: [{ error: 'Text is missing' }] };
-    ctx.response.status = 400; //  BAD REQUEST
-    return;
-  }
-  item.id = `${parseInt(lastId) + 1}`;
-  lastId = item.id;
-  item.date = new Date();
-  item.version = 1;
-  items.push(item);
-  ctx.response.body = item;
-  ctx.response.status = 201; // CREATED
-  broadcast({ event: 'created', payload: { item } });
 };
 
-router.post('/item', async (ctx) => {
-  await createItem(ctx);
+// Crearea rutei
+const router = new Router();
+
+// Ruta pentru obținerea tuturor cărților
+router.get('/book', (ctx) => {
+  ctx.response.body = books;
+  ctx.response.status = 200; // OK
 });
 
-router.put('/item/:id', async (ctx) => {
+// Ruta pentru obținerea unei cărți după ID
+router.get('/book/:id', (ctx) => {
+  const bookId = ctx.params.id;
+  const book = books.find((b) => b.id === bookId);
+  if (book) {
+    ctx.response.body = book;
+    ctx.response.status = 200; // OK
+  } else {
+    ctx.response.body = { message: `Book with id ${bookId} not found` };
+    ctx.response.status = 404; // NOT FOUND
+  }
+});
+
+// Funcția de creare a unei cărți
+const createBook = async (ctx) => {
+  const bookData = ctx.request.body;
+  if (!bookData.title || !bookData.author || !bookData.pages) { // Validare
+    ctx.response.body = { message: 'Title, author, and pages are required' };
+    ctx.response.status = 400; // BAD REQUEST
+    return;
+  }
+  const newBook = new Book({
+    id: `${parseInt(lastId) + 1}`,
+    title: bookData.title,
+    author: bookData.author,
+    pages: bookData.pages,
+    date: new Date(),
+    version: 1,
+    inStock: bookData.inStock !== undefined ? bookData.inStock : true // Asigură că se păstrează stocul
+  });
+  lastId = newBook.id;
+  books.push(newBook);
+  ctx.response.body = newBook;
+  ctx.response.status = 201; // CREATED
+  broadcast({ event: 'created', payload: { book: newBook } });
+};
+
+// Ruta pentru crearea unei cărți
+router.post('/book', async (ctx) => {
+  await createBook(ctx);
+});
+
+// Ruta pentru actualizarea unei cărți
+router.put('/book/:id', async (ctx) => {
   const id = ctx.params.id;
-  const item = ctx.request.body;
-  item.date = new Date();
-  const itemId = item.id;
-  if (itemId && id !== item.id) {
-    ctx.response.body = { issue: [{ error: `Param id and body id should be the same` }] };
-    ctx.response.status = 400; // BAD REQUEST
-    return;
-  }
-  if (!itemId) {
-    await createItem(ctx);
-    return;
-  }
-  const index = items.findIndex(item => item.id === id);
+  const bookData = ctx.request.body;
+  const index = books.findIndex(b => b.id === id);
+
   if (index === -1) {
-    ctx.response.body = { issue: [{ error: `item with id ${id} not found` }] };
-    ctx.response.status = 400; // BAD REQUEST
+    ctx.response.body = { message: `Book with id ${id} not found` };
+    ctx.response.status = 404; // NOT FOUND
     return;
   }
-  const itemVersion = parseInt(ctx.request.get('ETag')) || item.version;
-  if (itemVersion < items[index].version) {
-    ctx.response.body = { issue: [{ error: `Version conflict` }] };
+
+  const currentBook = books[index];
+
+  // Verificare conflict de versiune
+  const bookVersion = parseInt(ctx.request.get('ETag')) || bookData.version;
+  if (bookVersion < currentBook.version) {
+    ctx.response.body = { message: `Version conflict` };
     ctx.response.status = 409; // CONFLICT
     return;
   }
-  item.version++;
-  items[index] = item;
-  lastUpdated = new Date();
-  ctx.response.body = item;
+
+  // Actualizare date
+  const updatedBook = {
+    ...currentBook,
+    ...bookData,
+    date: new Date(),
+    version: currentBook.version + 1,
+  };
+  books[index] = updatedBook;
+
+  ctx.response.body = updatedBook;
   ctx.response.status = 200; // OK
-  broadcast({ event: 'updated', payload: { item } });
+  broadcast({ event: 'updated', payload: { book: updatedBook } });
 });
 
-router.del('/item/:id', ctx => {
+// Ruta pentru ștergerea unei cărți
+router.delete('/book/:id', async (ctx) => {
   const id = ctx.params.id;
-  const index = items.findIndex(item => id === item.id);
-  if (index !== -1) {
-    const item = items[index];
-    items.splice(index, 1);
-    lastUpdated = new Date();
-    broadcast({ event: 'deleted', payload: { item } });
+  const index = books.findIndex(b => b.id === id);
+
+  if (index === -1) {
+    ctx.response.body = { message: `Book with id ${id} not found` };
+    ctx.response.status = 404; // NOT FOUND
+    return;
   }
-  ctx.response.status = 204; // no content
+
+  const deletedBook = books[index];
+  books.splice(index, 1);
+  ctx.response.status = 204; // NO CONTENT
+  broadcast({ event: 'deleted', payload: { book: deletedBook } });
 });
 
+// Generarea de cărți noi la fiecare 5 secunde
 setInterval(() => {
   lastUpdated = new Date();
   lastId = `${parseInt(lastId) + 1}`;
-  const item = new Item({ id: lastId, text: `item ${lastId}`, date: lastUpdated, version: 1 });
-  items.push(item);
-  console.log(`
-   ${item.text}`);
-  broadcast({ event: 'created', payload: { item } });
-}, 150000);
+  const newBook = new Book({
+    id: lastId,
+    title: `Book ${lastId}`,
+    author: `Author ${lastId}`,
+    pages: 100 + parseInt(lastId) * 50,
+    date: lastUpdated,
+    version: 1,
+    inStock: true // Setăm inStock la true pentru cărțile noi
+  });
+  books.push(newBook);
+  console.log(`New book: ${newBook.title}`);
+  broadcast({ event: 'created', payload: { book: newBook } });
+}, 5000);
 
+// Activarea rutelor
 app.use(router.routes());
 app.use(router.allowedMethods());
 
-server.listen(3000);
+// Pornirea serverului pe portul 3000
+server.listen(3000, () => {
+  console.log('Server is running on http://localhost:3000');
+});
